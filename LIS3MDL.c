@@ -254,16 +254,16 @@ bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
     switch (gauss)
     {
     case GAUSS_4:
-        scale = 0.14f;
+        scale = 6842;
         break;
     case GAUSS_8:
-        scale = 0.29f;
+        scale = 3421;
         break;
     case GAUSS_12:
-        scale = 0.43f;
+        scale = 2281;
         break;
     case GAUSS_16:
-        scale = 0.58f;
+        scale = 1711;
         break;
     default:
         scale = 0.14f;
@@ -275,9 +275,9 @@ bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
         return false;
     }
 
-    data->x = raw.x * scale;
-    data->y = raw.y * scale;
-    data->z = raw.z * scale;
+    data->x = (float)raw.x / scale * 100;
+    data->y = (float)raw.y / scale * 100;
+    data->z = (float)raw.z / scale * 100;
 
     return true;
 }
@@ -346,7 +346,7 @@ int main()
     stdio_init_all();
 
     // I2C initialisation, 10 Hz (LIS3MDL standard mode)
-    i2c_init(i2c_get_instance(PICO_DEFAULT_I2C), 10);
+    i2c_init(i2c_get_instance(PICO_DEFAULT_I2C), 100000);
 
     gpio_init(PICO_DEFAULT_I2C_SDA_PIN);
     gpio_init(PICO_DEFAULT_I2C_SCL_PIN);
@@ -395,6 +395,6 @@ int main()
         float heading = lis3mdl_get_heading(data.x, data.y);
         printf(">heading:%.2f\r\n", heading);
 
-        sleep_ms(100);
+        sleep_ms(10);
     }
 }
