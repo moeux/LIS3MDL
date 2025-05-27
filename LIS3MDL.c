@@ -2,7 +2,7 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 
-#define MERGE(low, high) ((high < 8) | low)
+#define MERGE(low, high) ((high << 8) | low)
 
 #define SLAVE_ADDRESS _u(0x1C)
 #define OFFSET_X_REG_L_M _u(0x05)
