@@ -2,27 +2,49 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 
-#define DRDY_PIN 3
-#define SLAVE_ADDRESS 0x1C
-#define WHO_AM_I_REG 0x0F
-#define CTRL_REG1 0x20
-#define CTRL_REG2 0x21
-#define CTRL_REG4 0x23
-#define INT_CFG 0x30
-#define INT_SRC 0x31
-#define OUT_X_L 0x28
-#define OUT_X_H 0x29
-#define OUT_Y_L 0x2A
-#define OUT_Y_H 0x2B
-#define OUT_Z_L 0x2C
-#define OUT_Z_H 0x2D
+#define MERGE(low, high) ((high < 8) | low)
 
-volatile bool data_ready = false;
+#define SLAVE_ADDRESS _u(0x1C)
+#define OFFSET_X_REG_L_M _u(0x05)
+#define OFFSET_X_REG_H_M _u(0x06)
+#define OFFSET_Y_REG_L_M _u(0x07)
+#define OFFSET_Y_REG_H_M _u(0x08)
+#define OFFSET_Z_REG_L_M _u(0x09)
+#define OFFSET_Z_REG_H_M _u(0x0A)
+#define WHO_AM_I_REG _u(0x0F)
+#define CTRL_REG1 _u(0x20)
+#define CTRL_REG2 _u(0x21)
+#define CTRL_REG3 _u(0x22)
+#define CTRL_REG4 _u(0x23)
+#define CTRL_REG5 _u(0x24)
+#define STATUS_REG _u(0x27)
+#define OUT_X_L _u(0x28)
+#define OUT_X_H _u(0x29)
+#define OUT_Y_L _u(0x2A)
+#define OUT_Y_H _u(0x2B)
+#define OUT_Z_L _u(0x2C)
+#define OUT_Z_H _u(0x2D)
 
-void gpio_irq_handler(uint gpio, uint32_t event_mask)
+typedef struct
 {
-    data_ready = true;
-}
+    uint16_t x;
+    uint16_t y;
+    uint16_t z;
+} axes_data_t;
+
+typedef struct
+{
+    // ZYX overrun -> a new set of data has overwritten the previous data
+    bool overrun;
+    bool z_overrun;
+    bool y_overrun;
+    bool x_overrun;
+    // A new set of data is available
+    bool data_available;
+    bool z_data_available;
+    bool y_data_available;
+    bool x_data_available;
+} status_t;
 
 int i2c_write_register(uint8_t reg, uint8_t value)
 {
@@ -36,154 +58,135 @@ int i2c_write_register(uint8_t reg, uint8_t value)
         1000 * 500);
 }
 
-int i2c_read_register(uint8_t reg, uint8_t *value)
+int i2c_read_register(uint8_t reg)
 {
-    int write = i2c_write_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, &reg, sizeof(reg), true, 1000 * 500);
+    uint8_t value;
+    int write = i2c_write_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, &reg, sizeof(reg), false, 1000 * 500);
     if (write < 0)
     {
         return write;
     }
-
-    int read = i2c_read_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, *value, sizeof(*value), true, 1000 * 500);
+    int read = i2c_read_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, &value, sizeof(value), false, 1000 * 500);
     if (read < 0)
     {
         return read;
     }
-
-    return write + read;
+    return value;
 }
 
-bool lis3mdl_init()
+void lis3mdl_init()
 {
-    int who_am_i;
-    int result = i2c_read_register(WHO_AM_I_REG, &who_am_i);
+    uint8_t who_am_i = i2c_read_register(WHO_AM_I_REG);
 
-    if (result < 0 || who_am_i != 0x3D)
+    if (who_am_i == 0x3D)
     {
-        return false;
+        puts("LIS3MDL detected!");
     }
-
-    // Configuration:
-    //  - Temperature Sensor disabled
-    //  - X/Y axes operative mode: Ultrahigh-performance mode
-    //  - Output data rate selection: 80 Hz (ignored due to FAST_ODR)
-    //  - FAST_ODR enabled
-    //  - Self-Test disabled
-    if (i2c_write_register(CTRL_REG1, 0x7E) < 0)
+    else
     {
-        return false;
-    }
-    // Configuration:
-    //  - Full-scale: +/- Gauss
-    //  - REBOOT: no reboot, normal mode
-    //  - SOFT_RST: disabled
-    if (i2c_write_register(CTRL_REG2, 0x0) < 0)
-    {
-        return false;
-    }
-    // Configuration:
-    //  - Z axis operative mode: Ultrahigh-performance mode
-    //  - Big/little Endian: Little Endian (data MSb at lower address)
-    if (i2c_write_register(CTRL_REG4, 0xE) < 0)
-    {
-        return false;
-    }
-    // Configuration:
-    //  - X-axis interrupt generation enabled
-    //  - Y-axis interrupt generation enabled
-    //  - X-axis interrupt generation enabled
-    //  - Interrupt active configuration: low
-    //  - Latch interrupt enabled
-    //  - Interrupt enabled
-    if (i2c_write_register(INT_CFG, 0xE9) < 0)
-    {
-        return false;
+        printf("LIS3MDL not detected! ID: 0x%X\n", who_am_i);
+        return;
     }
 
-    return true;
+    /* CTRL_REG1 - Configuration:
+        - TEMP_EN: disabled                 (0)
+        - OM: ultrahigh-performance mode    (11)
+        - DO: 10 Hz                         (100)
+        - FAST_ODR: disabled                (0)
+        - ST: disabled                      (0)
+    */
+    i2c_write_register(CTRL_REG1, 0x70);
+
+    /* CTRL_REG2 - Configuration:
+        - FS: +/- 4 Gauss                   (00)
+        - REBOOT: normal mode               (0)
+        - SOFT_RST: default                 (0)
+    */
+    i2c_write_register(CTRL_REG2, 0x0 & 0x6C);
+
+    /* CTRL_REG3 - Configuration:
+        - LP: disabled                      (0)
+        - SIM: 4-wire interface             (0)
+        - MD: continuous-conversion mode    (00)
+    */
+    i2c_write_register(CTRL_REG3, 0x0 & 0x27);
+
+    /* CTRL_REG4 - Configuration:
+        - OMZ: Ultrahigh-performance mode   (11)
+        - BLE: Big-Endian                   (0)
+    */
+    i2c_write_register(CTRL_REG4, 0xC & 0xE);
+
+    /* CTRL_REG5 - Configuration:
+        - FAST_READ: disabled               (0)
+        - BDU: continuous update            (0)
+    */
+    i2c_write_register(CTRL_REG5, 0x0 & 0xC0);
 }
 
-void lis3mdl_read(uint16_t *x, uint16_t *y, uint16_t *z)
+void lis3mdl_read_status(status_t *status)
 {
-    uint8_t x_high;
-    uint8_t x_low;
-    uint8_t y_high;
-    uint8_t y_low;
-    uint8_t z_high;
-    uint8_t z_low;
+    uint8_t raw = i2c_read_register(STATUS_REG);
 
-    i2c_read_register(OUT_X_H, &x_high);
-    i2c_read_register(OUT_X_L, &x_low);
-    *x = ((uint16_t)x_high << 8) | x_low;
+    status->overrun = raw & 0x80;
+    status->z_overrun = raw & 0x40;
+    status->y_overrun = raw & 0x20;
+    status->x_overrun = raw & 0x10;
+    status->data_available = raw & 0x8;
+    status->z_data_available = raw & 0x4;
+    status->y_data_available = raw & 0x2;
+    status->x_data_available = raw & 0x1;
+}
 
-    i2c_read_register(OUT_Y_H, &y_high);
-    i2c_read_register(OUT_Y_L, &y_low);
-    *y = ((uint16_t)y_high << 8) | y_low;
+void lis3mdl_read_raw_offsets(axes_data_t *data)
+{
+    data->x = MERGE(i2c_read_register(OFFSET_X_REG_L_M), i2c_read_register(OFFSET_X_REG_H_M));
+    data->y = MERGE(i2c_read_register(OFFSET_Y_REG_L_M), i2c_read_register(OFFSET_Y_REG_H_M));
+    data->z = MERGE(i2c_read_register(OFFSET_Z_REG_L_M), i2c_read_register(OFFSET_Z_REG_H_M));
+}
 
-    i2c_read_register(OUT_Z_H, &z_high);
-    i2c_read_register(OUT_Z_L, &z_low);
-    *z = ((uint16_t)z_high << 8) | z_low;
+void lis3mdl_read_raw_axes(axes_data_t *data)
+{
+    data->x = MERGE(i2c_read_register(OUT_X_L), i2c_read_register(OUT_X_H));
+    data->y = MERGE(i2c_read_register(OUT_Y_L), i2c_read_register(OUT_Y_H));
+    data->z = MERGE(i2c_read_register(OUT_Z_L), i2c_read_register(OUT_Z_H));
 }
 
 int main()
 {
     stdio_init_all();
 
-    gpio_init(DRDY_PIN);
-    gpio_set_dir(DRDY_PIN, GPIO_IN);
-    gpio_pull_up(DRDY_PIN);
+    // I2C initialisation, 10 Hz (LIS3MDL standard mode)
+    i2c_init(i2c_get_instance(PICO_DEFAULT_I2C), 10);
 
-    // Add ISR to handle whenever new data is ready to be read from the sensor
-    // ! Use gpio_add_raw_irq_handler() instead if there are other GPIO IRQ enabled
-    gpio_set_irq_enabled_with_callback(DRDY_PIN, GPIO_IRQ_EDGE_FALL, true, gpio_irq_handler);
-
-    i2c_init(i2c_get_instance(PICO_DEFAULT_I2C), 155);
-
+    gpio_init(PICO_DEFAULT_I2C_SDA_PIN);
+    gpio_init(PICO_DEFAULT_I2C_SCL_PIN);
     gpio_set_function(PICO_DEFAULT_I2C_SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(PICO_DEFAULT_I2C_SCL_PIN, GPIO_FUNC_I2C);
     gpio_pull_up(PICO_DEFAULT_I2C_SDA_PIN);
     gpio_pull_up(PICO_DEFAULT_I2C_SCL_PIN);
 
-    if (lis3mdl_init())
-    {
-        puts("LIS3MDL initialized.");
-    }
-    else
-    {
-        puts("LIS3MDL initialization failed.");
-    }
+    sleep_ms(5000);
+
+    puts("Initializing LIS3MDL module.");
+
+    lis3mdl_init();
+
+    puts("Getting readings.");
 
     while (true)
     {
-        if (data_ready)
-        {
-            // Reading the INT_SRC register to reset the INT pin.
-            uint8_t int_src;
-            uint8_t result = i2c_read_register(INT_SRC, &int_src);
-            switch (result)
-            {
-            case PICO_ERROR_GENERIC:
-                puts("Generic error reading the INT_SRC.");
-                break;
-            case PICO_ERROR_TIMEOUT:
-                puts("Timeout error reading the INT_SRC.");
-                break;
-            default:
-                printf("Successfully read the INT_SRC register: %x (%d bytes)", int_src, result);
-                break;
-            };
-
-            uint16_t x;
-            uint16_t y;
-            uint16_t z;
-
-            lis3mdl_read(&x, &y, &z);
-
-            printf("%x | %x | %x", x, y, z);
-
-            data_ready = false;
-        }
-
+        axes_data_t offsets = {0, 0, 0};
+        lis3mdl_read_raw_offsets(&offsets);
+        printf(">x_offset:%d,y_offset:%d,z_offset:%d\r\n", offsets.x, offsets.y, offsets.z);
+        status_t status = {false, false, false, false, false, false, false, false};
+        lis3mdl_read_status(&status);
+        printf(">overrun:%d,x_overrun:%d,y_overrun:%d,z_overrun:%d,data_available:%d,x_data_available:%d,y_data_available:%d,z_data_available:%d\r\n",
+               status.overrun, status.x_overrun, status.y_overrun, status.z_overrun,
+               status.data_available, status.x_data_available, status.y_data_available, status.z_data_available);
+        axes_data_t data = {0, 0, 0};
+        lis3mdl_read_raw_axes(&data);
+        printf(">x:%d,y:%d,z:%d\r\n", data.x, data.y, data.z);
         sleep_ms(100);
     }
 }
