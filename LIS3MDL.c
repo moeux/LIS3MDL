@@ -184,7 +184,7 @@ bool lis3mdl_init()
 
     /* CTRL_REG4 - Configuration:
         - OMZ: Ultrahigh-performance mode   (11)
-        - BLE: Little-Endian                   (1)
+        - BLE: Little-Endian                (1)
     */
     if (i2c_write_register(CTRL_REG4, 0xE & 0xE) < 0)
     {
@@ -371,8 +371,7 @@ int main()
 
     // lis3mdl_calibrate();
     // Pre-calibrated values
-    // lis3mdl_set_offsets(3939, -8614, 9060);
-    lis3mdl_set_offsets(0, 0, 0);
+    lis3mdl_set_offsets(3939, -8614, 9060);
 
     while (true)
     {
