@@ -184,9 +184,9 @@ bool lis3mdl_init()
 
     /* CTRL_REG4 - Configuration:
         - OMZ: Ultrahigh-performance mode   (11)
-        - BLE: Big-Endian                   (0)
+        - BLE: Little-Endian                   (1)
     */
-    if (i2c_write_register(CTRL_REG4, 0xC & 0xE) < 0)
+    if (i2c_write_register(CTRL_REG4, 0xE & 0xE) < 0)
     {
         return false;
     }
@@ -266,7 +266,7 @@ bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
         scale = 1711;
         break;
     default:
-        scale = 0.14f;
+        scale = 1;
         break;
     }
 
@@ -284,7 +284,7 @@ bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
 
 float lis3mdl_get_heading(const float x, const float y)
 {
-    float heading = atan2(y, x) * (180.0f / M_PI);
+    float heading = atan2f(y, x) * (180.0f / M_PI);
 
     if (heading < 0)
     {
@@ -371,11 +371,12 @@ int main()
 
     // lis3mdl_calibrate();
     // Pre-calibrated values
-    lis3mdl_set_offsets(3939, -8614, 9060);
+    // lis3mdl_set_offsets(3939, -8614, 9060);
+    lis3mdl_set_offsets(0, 0, 0);
 
     while (true)
     {
-        status_t status = {0};
+        /*status_t status = {0};
         lis3mdl_read_status(&status);
         printf(">overrun:%d,x_overrun:%d,y_overrun:%d,z_overrun:%d,data_available:%d,x_data_available:%d,y_data_available:%d,z_data_available:%d\r\n",
                status.overrun, status.x_overrun, status.y_overrun, status.z_overrun,
@@ -383,8 +384,9 @@ int main()
 
         axes_raw_data_t raw_data = {0, 0, 0};
         lis3mdl_read_raw_offsets(&raw_data);
-        printf(">x_offset:%d,y_offset:%d,z_offset:%d\r\n", raw_data.x, raw_data.y, raw_data.z);
+        printf(">x_offset:%d,y_offset:%d,z_offset:%d\r\n", raw_data.x, raw_data.y, raw_data.z);*/
 
+        axes_raw_data_t raw_data = {0, 0, 0};
         lis3mdl_read_raw_axes(&raw_data);
         printf(">x_raw:%d,y_raw:%d,z_raw:%d\r\n", raw_data.x, raw_data.y, raw_data.z);
 
