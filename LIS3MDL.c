@@ -184,9 +184,9 @@ bool lis3mdl_init()
 
     /* CTRL_REG4 - Configuration:
         - OMZ: Ultrahigh-performance mode   (11)
-        - BLE: Little-Endian                (1)
+        - BLE: Big-Endian                   (0)
     */
-    if (i2c_write_register(CTRL_REG4, 0xE & 0xE) < 0)
+    if (i2c_write_register(CTRL_REG4, 0xC & 0xE) < 0)
     {
         return false;
     }
@@ -254,19 +254,19 @@ bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
     switch (gauss)
     {
     case GAUSS_4:
-        scale = 6842;
+        scale = 6842.0f;
         break;
     case GAUSS_8:
-        scale = 3421;
+        scale = 3421.0f;
         break;
     case GAUSS_12:
-        scale = 2281;
+        scale = 2281.0f;
         break;
     case GAUSS_16:
-        scale = 1711;
+        scale = 1711.0f;
         break;
     default:
-        scale = 1;
+        scale = 1.0f;
         break;
     }
 
@@ -275,14 +275,14 @@ bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
         return false;
     }
 
-    data->x = (float)raw.x / scale * 100;
-    data->y = (float)raw.y / scale * 100;
-    data->z = (float)raw.z / scale * 100;
+    data->x = ((float)raw.x / scale) * 100.0f;
+    data->y = ((float)raw.y / scale) * 100.0f;
+    data->z = ((float)raw.z / scale) * 100.0f;
 
     return true;
 }
 
-float lis3mdl_get_heading(const float x, const float y)
+float lis3mdl_get_heading(const int16_t x, const int16_t y)
 {
     float heading = atan2f(y, x) * (180.0f / M_PI);
 
@@ -393,7 +393,7 @@ int main()
         lis3mdl_read_microteslas(&data, GAUSS_4);
         printf(">x_ut:%.2f,y_ut:%.2f,z_ut:%.2f\r\n", data.x, data.y, data.z);
 
-        float heading = lis3mdl_get_heading(data.x, data.y);
+        float heading = lis3mdl_get_heading(raw_data.x, raw_data.y);
         printf(">heading:%.2f\r\n", heading);
 
         sleep_ms(10);
