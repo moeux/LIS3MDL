@@ -19,64 +19,58 @@ static inline void split_int16(const int16_t val, uint8_t *low, uint8_t *high)
     *high = (uint8_t)((val >> 8) & 0xFF);
 }
 
-static int i2c_write_register(const uint8_t reg, const uint8_t value)
+static bool i2c_write_register(const uint8_t reg, const uint8_t value)
 {
     uint8_t buffer[2] = {reg, value};
-
-    return i2c_write_timeout_us(
+    uint8_t length = sizeof(buffer) / sizeof(buffer[0]);
+    int result = i2c_write_timeout_us(
         i2c_get_instance(PICO_DEFAULT_I2C),
         SLAVE_ADDRESS,
         buffer,
-        sizeof(buffer) / sizeof(buffer[0]),
+        length,
         false,
         I2C_TIMEOUT_US);
+
+    return result == length;
 }
 
-static int i2c_read_register(const uint8_t reg)
+static bool i2c_read_register(const uint8_t reg, uint8_t *value)
 {
-    uint8_t value;
-    int write = i2c_write_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, &reg, sizeof(reg), true, I2C_TIMEOUT_US);
-
-    if (write < 0)
+    if (i2c_write_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, &reg, sizeof(reg), true, I2C_TIMEOUT_US) != sizeof(reg))
     {
-        return write;
+        return false;
     }
 
-    int read = i2c_read_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, &value, sizeof(value), false, I2C_TIMEOUT_US);
-
-    if (read < 0)
+    if (i2c_read_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, value, sizeof(*value), false, I2C_TIMEOUT_US) != sizeof(*value))
     {
-        return read;
+        return false;
     }
 
-    return value;
+    return true;
 }
 
-static int i2c_read_multiple_registers(uint8_t reg, uint8_t *data, size_t length)
+static bool i2c_read_multiple_registers(uint8_t reg, uint8_t *data, size_t length)
 {
     reg = reg | 0x80; // set auto-increment bit
-    int write = i2c_write_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, &reg, sizeof(reg), true, I2C_TIMEOUT_US);
 
-    if (write < 0)
+    if (i2c_write_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, &reg, sizeof(reg), true, I2C_TIMEOUT_US) != sizeof(reg))
     {
-        return write;
+        return false;
     }
 
-    int read = i2c_read_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, data, length, false, I2C_TIMEOUT_US);
-
-    if (read < 0)
+    if (i2c_read_timeout_us(i2c_get_instance(PICO_DEFAULT_I2C), SLAVE_ADDRESS, data, length, false, I2C_TIMEOUT_US) != length)
     {
-        return read;
+        return false;
     }
 
-    return write + read;
+    return true;
 }
 
 static bool lis3mdl_read_axes_data(uint8_t reg, axes_raw_data_t *data)
 {
     uint8_t raw[6];
 
-    if (i2c_read_multiple_registers(reg, raw, sizeof(raw) / sizeof(raw[0])) < 0)
+    if (!i2c_read_multiple_registers(reg, raw, sizeof(raw) / sizeof(raw[0])))
     {
         return false;
     }
@@ -90,57 +84,72 @@ static bool lis3mdl_read_axes_data(uint8_t reg, axes_raw_data_t *data)
 
 bool lis3mdl_init()
 {
-    if (i2c_read_register(WHO_AM_I_REG) != 0x3D)
+    uint8_t id = 0;
+
+    if (!i2c_read_register(WHO_AM_I_REG, &id) || id != 0x3D)
     {
         return false;
     }
 
     /* CTRL_REG1 - Configuration:
-        - TEMP_EN: disabled                 (0)
-        - OM: ultrahigh-performance mode    (11)
-        - DO: 10 Hz                         (100)
-        - FAST_ODR: disabled                (0)
-        - ST: disabled                      (0)
+        - TEMP_EN:      enabled                         (1)
+        - OM:           ultrahigh-performance mode      (11)
+        - DO:           10 Hz                           (100)
+        - FAST_ODR:     disabled                        (0)
+        - ST:           disabled                        (0)
     */
-    if (i2c_write_register(CTRL_REG1, 0x70) < 0)
+    if (!i2c_write_register(CTRL_REG1, 0xF0))
     {
         return false;
     }
 
     /* CTRL_REG2 - Configuration:
-        - FS: +/- 4 Gauss                   (00)
-        - REBOOT: normal mode               (0)
-        - SOFT_RST: default                 (0)
+        - FS:           +/- 4 Gauss                     (00)
+        - REBOOT:       normal mode                     (0)
+        - SOFT_RST:     default                         (0)
     */
-    if (i2c_write_register(CTRL_REG2, 0x0 & 0x6C) < 0)
+    if (!i2c_write_register(CTRL_REG2, 0x0 & 0x6C))
     {
         return false;
     }
 
     /* CTRL_REG3 - Configuration:
-        - LP: disabled                      (0)
-        - SIM: 4-wire interface             (0)
-        - MD: continuous-conversion mode    (00)
+        - LP:           disabled                        (0)
+        - SIM:          4-wire interface                (0)
+        - MD:           continuous-conversion mode      (00)
     */
-    if (i2c_write_register(CTRL_REG3, 0x0 & 0x27) < 0)
+    if (!i2c_write_register(CTRL_REG3, 0x0 & 0x27))
     {
         return false;
     }
 
     /* CTRL_REG4 - Configuration:
-        - OMZ: Ultrahigh-performance mode   (11)
-        - BLE: Big-Endian                   (0)
+        - OMZ:          ultrahigh-performance mode      (11)
+        - BLE:          big-Endian                      (0)
     */
-    if (i2c_write_register(CTRL_REG4, 0xC & 0xE) < 0)
+    if (!i2c_write_register(CTRL_REG4, 0xC & 0xE))
     {
         return false;
     }
 
     /* CTRL_REG5 - Configuration:
-        - FAST_READ: disabled               (0)
-        - BDU: continuous update            (0)
+        - FAST_READ:    disabled                        (0)
+        - BDU:          continuous update               (0)
     */
-    if (i2c_write_register(CTRL_REG5, 0x0 & 0xC0) < 0)
+    if (!i2c_write_register(CTRL_REG5, 0x0 & 0xC0))
+    {
+        return false;
+    }
+
+    /* INT_CFG - Configration:
+        - XIEN:         enabled                         (1)
+        - YIEN:         enabled                         (1)
+        - ZIEN:         enabled                         (1)
+        - IEA:          high                            (1)
+        - LIR:          latched                         (0)
+        - IEN:          disabled                        (0)
+     */
+    if (!i2c_write_register(INT_CFG, 0xEC & 0xEF | 0x8))
     {
         return false;
     }
@@ -158,7 +167,7 @@ bool lis3mdl_set_offsets(const int16_t x, const int16_t y, const int16_t z)
 
     for (int i = 0; i < sizeof(data) / sizeof(data[0]); i++)
     {
-        if (i2c_write_register(OFFSET_X_REG_L_M + i, data[i]) < 0)
+        if (!i2c_write_register(OFFSET_X_REG_L_M + i, data[i]))
         {
             return false;
         }
@@ -167,11 +176,31 @@ bool lis3mdl_set_offsets(const int16_t x, const int16_t y, const int16_t z)
     return true;
 }
 
+bool lis3mdl_set_threshold(const uint16_t threshold)
+{
+    uint8_t low = 0;
+    uint8_t high = 0;
+
+    split_int16(threshold, &low, &high);
+
+    if (!i2c_write_register(INT_THS_L, low))
+    {
+        return false;
+    }
+
+    if (!i2c_write_register(INT_THS_H, high & 0x7F))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 bool lis3mdl_read_status(status_t *status)
 {
-    int read = i2c_read_register(STATUS_REG);
+    uint8_t read = 0;
 
-    if (read < 0)
+    if (!i2c_read_register(STATUS_REG, &read))
     {
         return false;
     }
@@ -188,9 +217,45 @@ bool lis3mdl_read_status(status_t *status)
     return true;
 }
 
+bool lis3mdl_read_interrupt_source(int_src_t *source)
+{
+    uint8_t read = 0;
+
+    if (!i2c_read_register(INT_SRC, &read))
+    {
+        return false;
+    }
+
+    source->x_positive_exceeded = (read & 0x80) >> 7;
+    source->y_positive_exceeded = (read & 0x40) >> 6;
+    source->z_positive_exceeded = (read & 0x20) >> 5;
+    source->x_negative_exceeded = (read & 0x10) >> 4;
+    source->y_negative_exceeded = (read & 8) >> 3;
+    source->z_negative_exceeded = (read & 4) >> 2;
+    source->overflow = (read & 2) >> 1;
+    source->interrupted = read & 1;
+
+    return true;
+}
+
 bool lis3mdl_read_raw_offsets(axes_raw_data_t *data)
 {
     return lis3mdl_read_axes_data(OFFSET_X_REG_L_M, data);
+}
+
+bool lis3mdl_read_raw_threshold(uint16_t *threshold)
+{
+    uint8_t low = 0;
+    uint8_t high = 0;
+
+    if (!i2c_read_register(INT_THS_L, &low) || !i2c_read_register(INT_THS_H, &high))
+    {
+        return false;
+    }
+
+    *threshold = MERGE(low, high);
+
+    return true;
 }
 
 bool lis3mdl_read_raw_axes(axes_raw_data_t *data)
@@ -214,10 +279,25 @@ bool lis3mdl_read_raw_axes(axes_raw_data_t *data)
     return false;
 }
 
-bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
+bool lis3mdl_read_raw_temperature(int16_t *temp)
+{
+    uint8_t low = 0;
+    uint8_t high = 0;
+
+    if (!i2c_read_register(TEMP_OUT_L, &low) || !i2c_read_register(TEMP_OUT_H, &high))
+    {
+        return false;
+    }
+
+    *temp = MERGE(low, high);
+
+    return true;
+}
+
+axes_data_t lis3mdl_get_microteslas(const axes_raw_data_t raw, const gauss_scale_t gauss)
 {
     float scale;
-    axes_raw_data_t raw = {0, 0, 0};
+    axes_data_t data = {0.0, 0.0, 0.0};
 
     switch (gauss)
     {
@@ -234,20 +314,15 @@ bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
         scale = 1711.0f;
         break;
     default:
-        scale = 1.0f;
+        scale = 6842.0f;
         break;
     }
 
-    if (!lis3mdl_read_raw_axes(&raw))
-    {
-        return false;
-    }
+    data.x = ((float)raw.x / scale) * 100.0f;
+    data.y = ((float)raw.y / scale) * 100.0f;
+    data.z = ((float)raw.z / scale) * 100.0f;
 
-    data->x = ((float)raw.x / scale) * 100.0f;
-    data->y = ((float)raw.y / scale) * 100.0f;
-    data->z = ((float)raw.z / scale) * 100.0f;
-
-    return true;
+    return data;
 }
 
 float lis3mdl_get_heading(const int16_t x, const int16_t y)
@@ -262,6 +337,18 @@ float lis3mdl_get_heading(const int16_t x, const int16_t y)
     return heading;
 }
 
+float lis3mdl_get_celcius(const int16_t temp)
+{
+    int16_t raw = 0;
+
+    if (!lis3mdl_read_raw_temperature(&raw))
+    {
+        return false;
+    }
+
+    return (float)temp / 8.0;
+}
+
 int main()
 {
     stdio_init_all();
@@ -270,7 +357,6 @@ int main()
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
     gpio_put(PICO_DEFAULT_LED_PIN, 1);
 
-    // I2C initialisation, 10 Hz (LIS3MDL standard mode)
     i2c_init(i2c_get_instance(PICO_DEFAULT_I2C), 100000);
 
     gpio_init(PICO_DEFAULT_I2C_SDA_PIN);
@@ -291,6 +377,7 @@ int main()
     }
 
     lis3mdl_set_offsets(0, 0, 0);
+    lis3mdl_set_threshold(0);
 
     puts("LIS3MDL initialized.");
 
@@ -301,14 +388,16 @@ int main()
         if (lis3mdl_read_status(&status) && (status.data_available || status.x_data_available || status.y_data_available || status.z_data_available))
         {
             axes_raw_data_t raw_data = {0, 0, 0};
-            axes_data_t data = {0.0, 0.0, 0.0};
+            axes_data_t data = {0, 0, 0};
+            int16_t temp = 0;
 
-            if (lis3mdl_read_raw_axes(&raw_data) && lis3mdl_read_microteslas(&data, GAUSS_4))
+            if (lis3mdl_read_raw_axes(&raw_data) && lis3mdl_read_raw_temperature(&temp))
             {
                 printf(">x_raw:%d,y_raw:%d,z_raw:%d\r\n", raw_data.x, raw_data.y, raw_data.z);
+                data = lis3mdl_get_microteslas(raw_data, GAUSS_4);
                 printf(">x_ut:%.2f,y_ut:%.2f,z_ut:%.2f\r\n", data.x, data.y, data.z);
-                float heading = lis3mdl_get_heading(raw_data.x, raw_data.y);
-                printf(">heading:%.2f\r\n", heading);
+                printf(">heading:%.2f\r\n", lis3mdl_get_heading(raw_data.x, raw_data.y));
+                printf(">temp_raw:%d,temp_c:%f\r\n", temp, lis3mdl_get_celcius(temp));
             }
         }
 

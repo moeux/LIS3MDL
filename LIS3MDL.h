@@ -23,6 +23,12 @@
 #define OUT_Y_H _u(0x2B)
 #define OUT_Z_L _u(0x2C)
 #define OUT_Z_H _u(0x2D)
+#define TEMP_OUT_L _u(0x2E)
+#define TEMP_OUT_H _u(0x2F)
+#define INT_CFG _u(0x30)
+#define INT_SRC _u(0x31)
+#define INT_THS_L _u(0x32)
+#define INT_THS_H _u(0x33)
 
 typedef enum
 {
@@ -60,6 +66,18 @@ typedef struct
     bool x_data_available;
 } status_t;
 
+typedef struct
+{
+    bool x_positive_exceeded;
+    bool y_positive_exceeded;
+    bool z_positive_exceeded;
+    bool x_negative_exceeded;
+    bool y_negative_exceeded;
+    bool z_negative_exceeded;
+    bool overflow;
+    bool interrupted;
+} int_src_t;
+
 /**
  * Initializes the LIS3MDL, by writing into the control registers.
  * @return `true` on successful initialization, otherwise `false`.
@@ -74,11 +92,23 @@ bool lis3mdl_init();
  */
 bool lis3mdl_set_offsets(const int16_t x, const int16_t y, const int16_t z);
 /**
+ * Sets the interrupt threshold, both as positive and negative threshold.
+ * @param threshold The absolute interrupt threshold.
+ * @return `true` on successful threshold calibration, otherwise `false`.
+ */
+bool lis3mdl_set_threshold(const uint16_t threshold);
+/**
  * Reads the status register.
  * @param status Struct to read into.
  * @return `true` on successful status retrieval, otherwise `false`.
  */
 bool lis3mdl_read_status(status_t *status);
+/**
+ * Reads the interrupt source register.
+ * @param source Struct to read into.
+ * @return `true` on successful interrupt source retrieval, otherwise `false`.
+ */
+bool lis3mdl_read_interrupt_source(int_src_t *source);
 /**
  * Reads the raw hard iron offset registers.
  * @param data Struct to read into.
@@ -86,18 +116,31 @@ bool lis3mdl_read_status(status_t *status);
  */
 bool lis3mdl_read_raw_offsets(axes_raw_data_t *data);
 /**
+ * Reads the raw interrupt threshold registers.
+ * @param threshold Variable to read into.
+ * @return `true` on successful threshold retrieval, otherwise `false`.
+ */
+bool lis3mdl_read_raw_threshold(uint16_t *threshold);
+/**
  * Reads the raw axes data.
  * @param data Struct to read into.
  * @return `true` on successful axes data retrieval, otherwise `false`.
  */
 bool lis3mdl_read_raw_axes(axes_raw_data_t *data);
 /**
- * Reads the axes data in microtesla.
- * @param data Struct to read into.
- * @param gauss The scale the LIS3MDL is operating in.
- * @return `true` on successful axes data retrieval, otherwise `false`.
+ * Reads the raw temperature data.
+ * @param temp Variable to read into.
+ * @return `true` on successful temperature data retrieval, otherwise `false`.
  */
-bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss);
+bool lis3mdl_read_raw_temperature(int16_t *temp);
+/**
+ * Calculates the axes data in microtesla.
+ * @param data Struct to read into.
+ * @param raw The raw axes data.
+ * @param gauss The scale the LIS3MDL is operating in.
+ * @return The axes data in microtesla.
+ */
+axes_data_t lis3mdl_get_microteslas(const axes_raw_data_t raw, const gauss_scale_t gauss);
 /**
  * Calculates the compass heading in degrees.
  * @param x The raw x-axis value.
@@ -105,5 +148,11 @@ bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss);
  * @return The compass heading.
  */
 float lis3mdl_get_heading(const int16_t x, const int16_t y);
+/**
+ * Calculates the temperature data in degrees celcius.
+ * @param temp The raw temperature data.
+ * @return The temperature in degrees celcius.
+ */
+float lis3mdl_get_celcius(const int16_t temp);
 
 #endif
