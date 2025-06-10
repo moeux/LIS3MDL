@@ -3,8 +3,7 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 
-#define MERGE(low, high) ((high << 8) | low)
-#define MAP(x, in_min, in_max, out_min, out_max) ((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
+#define MERGE(low, high) ((int16_t)((high << 8) | low))
 
 #define I2C_TIMEOUT_US 500000
 #define SLAVE_ADDRESS _u(0x1C)
@@ -50,23 +49,26 @@ typedef struct
     float z;
 } axes_data_t;
 
-typedef union
+typedef struct
 {
-    uint8_t raw;
-    struct
-    {
-        // ZYX overrun -> a new set of data has overwritten the previous data
-        bool overrun;
-        bool z_overrun;
-        bool y_overrun;
-        bool x_overrun;
-        // A new set of data is available
-        bool data_available;
-        bool z_data_available;
-        bool y_data_available;
-        bool x_data_available;
-    };
+    // ZYX overrun -> a new set of data has overwritten the previous data
+    bool overrun;
+    bool z_overrun;
+    bool y_overrun;
+    bool x_overrun;
+    // A new set of data is available
+    bool data_available;
+    bool z_data_available;
+    bool y_data_available;
+    bool x_data_available;
 } status_t;
+
+int16_t x_max = INT16_MIN;
+int16_t x_min = INT16_MAX;
+int16_t y_max = INT16_MIN;
+int16_t y_min = INT16_MAX;
+int16_t z_max = INT16_MIN;
+int16_t z_min = INT16_MAX;
 
 static inline void split_int16(const int16_t val, uint8_t *low, uint8_t *high)
 {
@@ -211,7 +213,7 @@ bool lis3mdl_set_offsets(const int16_t x, const int16_t y, const int16_t z)
     split_int16(y, &data[2], &data[3]);
     split_int16(z, &data[4], &data[5]);
 
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < sizeof(data) / sizeof(data[0]); i++)
     {
         if (i2c_write_register(OFFSET_X_REG_L_M + i, data[i]) < 0)
         {
@@ -231,7 +233,14 @@ bool lis3mdl_read_status(status_t *status)
         return false;
     }
 
-    status->raw = read;
+    status->overrun = (read & 0x80) >> 7;
+    status->z_overrun = (read & 0x40) >> 6;
+    status->y_overrun = (read & 0x20) >> 5;
+    status->x_overrun = (read & 0x10) >> 4;
+    status->data_available = (read & 8) >> 3;
+    status->z_data_available = (read & 4) >> 2;
+    status->y_data_available = (read & 2) >> 1;
+    status->x_data_available = read & 1;
 
     return true;
 }
@@ -243,7 +252,23 @@ bool lis3mdl_read_raw_offsets(axes_raw_data_t *data)
 
 bool lis3mdl_read_raw_axes(axes_raw_data_t *data)
 {
-    return lis3mdl_read_axes_data(OUT_X_L, data);
+    if (lis3mdl_read_axes_data(OUT_X_L, data))
+    {
+        x_max = MAX(data->x, x_max);
+        x_min = MIN(data->x, x_min);
+        y_max = MAX(data->y, y_max);
+        y_min = MIN(data->y, y_min);
+        z_max = MAX(data->z, z_max);
+        z_min = MIN(data->z, z_min);
+
+        data->x = data->x - ((x_max + x_min) / 2);
+        data->y = data->y - ((y_max + y_min) / 2);
+        data->z = data->z - ((z_max + z_min) / 2);
+
+        return true;
+    }
+
+    return false;
 }
 
 bool lis3mdl_read_microteslas(axes_data_t *data, const gauss_scale_t gauss)
@@ -294,56 +319,13 @@ float lis3mdl_get_heading(const int16_t x, const int16_t y)
     return heading;
 }
 
-void lis3mdl_calibrate()
-{
-    int16_t x_max = INT16_MIN;
-    int16_t x_min = INT16_MAX;
-    int16_t y_max = INT16_MIN;
-    int16_t y_min = INT16_MAX;
-    int16_t z_max = INT16_MIN;
-    int16_t z_min = INT16_MAX;
-
-    puts("Please rotate the sensor in all directions for calibration.");
-
-    for (int i = 0; i < 1000; i++)
-    {
-        axes_raw_data_t raw;
-
-        if (lis3mdl_read_raw_axes(&raw))
-        {
-            x_max = MAX(raw.x, x_max);
-            x_min = MIN(raw.x, x_min);
-            y_max = MAX(raw.y, y_max);
-            y_min = MIN(raw.y, y_min);
-            z_max = MAX(raw.z, z_max);
-            z_min = MIN(raw.z, z_min);
-
-            printf("Sample %d\n", i);
-            printf(">x:%d,y:%d,z:%d\r\n", raw.x, raw.y, raw.z);
-        }
-
-        sleep_ms(20);
-    }
-
-    int16_t x_offset = -(x_min + x_max) / 2;
-    int16_t y_offset = -(y_min + y_max) / 2;
-    int16_t z_offset = -(z_min + z_max) / 2;
-
-    printf("Computed Offsets:\n     X: %d\n     Y: %d\n     Z: %d\n", x_offset, y_offset, z_offset);
-
-    if (lis3mdl_set_offsets(x_offset, y_offset, z_offset))
-    {
-        puts("Offsets applied successfully.");
-    }
-    else
-    {
-        puts("Failed to apply offsets.");
-    }
-}
-
 int main()
 {
     stdio_init_all();
+
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    gpio_put(PICO_DEFAULT_LED_PIN, 1);
 
     // I2C initialisation, 10 Hz (LIS3MDL standard mode)
     i2c_init(i2c_get_instance(PICO_DEFAULT_I2C), 100000);
@@ -359,42 +341,34 @@ int main()
 
     puts("Initializing LIS3MDL module.");
 
-    if (!lis3mdl_init())
+    while (!lis3mdl_init())
     {
         puts("LIS3MDL initialization failed!");
-
-        while (true)
-        {
-            sleep_ms(10);
-        }
+        sleep_ms(500);
     }
 
-    // lis3mdl_calibrate();
-    // Pre-calibrated values
-    lis3mdl_set_offsets(3939, -8614, 9060);
+    lis3mdl_set_offsets(0, 0, 0);
+
+    puts("LIS3MDL initialized.");
 
     while (true)
     {
-        /*status_t status = {0};
+        status_t status = {false, false, false, false, false, false, false, false};
         lis3mdl_read_status(&status);
-        printf(">overrun:%d,x_overrun:%d,y_overrun:%d,z_overrun:%d,data_available:%d,x_data_available:%d,y_data_available:%d,z_data_available:%d\r\n",
-               status.overrun, status.x_overrun, status.y_overrun, status.z_overrun,
-               status.data_available, status.x_data_available, status.y_data_available, status.z_data_available);
 
-        axes_raw_data_t raw_data = {0, 0, 0};
-        lis3mdl_read_raw_offsets(&raw_data);
-        printf(">x_offset:%d,y_offset:%d,z_offset:%d\r\n", raw_data.x, raw_data.y, raw_data.z);*/
+        if (status.data_available || status.x_data_available || status.y_data_available || status.z_data_available)
+        {
+            axes_raw_data_t raw_data = {0, 0, 0};
+            lis3mdl_read_raw_axes(&raw_data);
+            printf(">x_raw:%d,y_raw:%d,z_raw:%d\r\n", raw_data.x, raw_data.y, raw_data.z);
 
-        axes_raw_data_t raw_data = {0, 0, 0};
-        lis3mdl_read_raw_axes(&raw_data);
-        printf(">x_raw:%d,y_raw:%d,z_raw:%d\r\n", raw_data.x, raw_data.y, raw_data.z);
+            axes_data_t data = {0.0, 0.0, 0.0};
+            lis3mdl_read_microteslas(&data, GAUSS_4);
+            printf(">x_ut:%.2f,y_ut:%.2f,z_ut:%.2f\r\n", data.x, data.y, data.z);
 
-        axes_data_t data = {0.0, 0.0, 0.0};
-        lis3mdl_read_microteslas(&data, GAUSS_4);
-        printf(">x_ut:%.2f,y_ut:%.2f,z_ut:%.2f\r\n", data.x, data.y, data.z);
-
-        float heading = lis3mdl_get_heading(raw_data.x, raw_data.y);
-        printf(">heading:%.2f\r\n", heading);
+            float heading = lis3mdl_get_heading(raw_data.x, raw_data.y);
+            printf(">heading:%.2f\r\n", heading);
+        }
 
         sleep_ms(10);
     }
