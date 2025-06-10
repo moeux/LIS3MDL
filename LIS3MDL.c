@@ -2,73 +2,16 @@
 #include <math.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+#include "LIS3MDL.h"
 
 #define MERGE(low, high) ((int16_t)((high << 8) | low))
 
-#define I2C_TIMEOUT_US 500000
-#define SLAVE_ADDRESS _u(0x1C)
-#define OFFSET_X_REG_L_M _u(0x05)
-#define OFFSET_X_REG_H_M _u(0x06)
-#define OFFSET_Y_REG_L_M _u(0x07)
-#define OFFSET_Y_REG_H_M _u(0x08)
-#define OFFSET_Z_REG_L_M _u(0x09)
-#define OFFSET_Z_REG_H_M _u(0x0A)
-#define WHO_AM_I_REG _u(0x0F)
-#define CTRL_REG1 _u(0x20)
-#define CTRL_REG2 _u(0x21)
-#define CTRL_REG3 _u(0x22)
-#define CTRL_REG4 _u(0x23)
-#define CTRL_REG5 _u(0x24)
-#define STATUS_REG _u(0x27)
-#define OUT_X_L _u(0x28)
-#define OUT_X_H _u(0x29)
-#define OUT_Y_L _u(0x2A)
-#define OUT_Y_H _u(0x2B)
-#define OUT_Z_L _u(0x2C)
-#define OUT_Z_H _u(0x2D)
-
-typedef enum
-{
-    GAUSS_4,
-    GAUSS_8,
-    GAUSS_12,
-    GAUSS_16
-} gauss_scale_t;
-
-typedef struct
-{
-    int16_t x;
-    int16_t y;
-    int16_t z;
-} axes_raw_data_t;
-
-typedef struct
-{
-    float x;
-    float y;
-    float z;
-} axes_data_t;
-
-typedef struct
-{
-    // ZYX overrun -> a new set of data has overwritten the previous data
-    bool overrun;
-    bool z_overrun;
-    bool y_overrun;
-    bool x_overrun;
-    // A new set of data is available
-    bool data_available;
-    bool z_data_available;
-    bool y_data_available;
-    bool x_data_available;
-} status_t;
-
-int16_t x_max = INT16_MIN;
-int16_t x_min = INT16_MAX;
-int16_t y_max = INT16_MIN;
-int16_t y_min = INT16_MAX;
-int16_t z_max = INT16_MIN;
-int16_t z_min = INT16_MAX;
+static int16_t x_max = INT16_MIN;
+static int16_t x_min = INT16_MAX;
+static int16_t y_max = INT16_MIN;
+static int16_t y_min = INT16_MAX;
+static int16_t z_max = INT16_MIN;
+static int16_t z_min = INT16_MAX;
 
 static inline void split_int16(const int16_t val, uint8_t *low, uint8_t *high)
 {
@@ -354,20 +297,19 @@ int main()
     while (true)
     {
         status_t status = {false, false, false, false, false, false, false, false};
-        lis3mdl_read_status(&status);
 
-        if (status.data_available || status.x_data_available || status.y_data_available || status.z_data_available)
+        if (lis3mdl_read_status(&status) && (status.data_available || status.x_data_available || status.y_data_available || status.z_data_available))
         {
             axes_raw_data_t raw_data = {0, 0, 0};
-            lis3mdl_read_raw_axes(&raw_data);
-            printf(">x_raw:%d,y_raw:%d,z_raw:%d\r\n", raw_data.x, raw_data.y, raw_data.z);
-
             axes_data_t data = {0.0, 0.0, 0.0};
-            lis3mdl_read_microteslas(&data, GAUSS_4);
-            printf(">x_ut:%.2f,y_ut:%.2f,z_ut:%.2f\r\n", data.x, data.y, data.z);
 
-            float heading = lis3mdl_get_heading(raw_data.x, raw_data.y);
-            printf(">heading:%.2f\r\n", heading);
+            if (lis3mdl_read_raw_axes(&raw_data) && lis3mdl_read_microteslas(&data, GAUSS_4))
+            {
+                printf(">x_raw:%d,y_raw:%d,z_raw:%d\r\n", raw_data.x, raw_data.y, raw_data.z);
+                printf(">x_ut:%.2f,y_ut:%.2f,z_ut:%.2f\r\n", data.x, data.y, data.z);
+                float heading = lis3mdl_get_heading(raw_data.x, raw_data.y);
+                printf(">heading:%.2f\r\n", heading);
+            }
         }
 
         sleep_ms(10);
